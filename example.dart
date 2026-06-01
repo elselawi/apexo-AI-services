@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
-/// Response model matching the worker's JSON output.
+// ============================================================================
+//  Models
+// ============================================================================
+
 class ReceiptItem {
   final String name;
   final int quantity;
@@ -27,7 +30,7 @@ class ReceiptItem {
 
 class ReceiptData {
   final String supplierName;
-  final String orderDate; // YYYY-MM-DD
+  final String orderDate;
   final List<ReceiptItem> orderItems;
   final double totalPrice;
 
@@ -50,14 +53,68 @@ class ReceiptData {
   );
 }
 
-/// Service that calls the Cloudflare Worker.
+class PostOpData {
+  final String postOpNotes;
+  final List<String> prescriptions;
+  final double price;
+  final double paid;
+  final Map<String, String> teeth;
+  final Map<String, String> teethExtraNotes;
+  final bool hasLabwork;
+  final String labName;
+  final String labworkNotes;
+
+  PostOpData({
+    required this.postOpNotes,
+    required this.prescriptions,
+    required this.price,
+    required this.paid,
+    required this.teeth,
+    required this.teethExtraNotes,
+    required this.hasLabwork,
+    required this.labName,
+    required this.labworkNotes,
+  });
+
+  factory PostOpData.fromJson(Map<String, dynamic> json) => PostOpData(
+    postOpNotes: json['postOpNotes'] as String? ?? '',
+    prescriptions:
+        (json['prescriptions'] as List<dynamic>?)
+            ?.map((e) => e as String)
+            .toList() ??
+        [],
+    price: (json['price'] as num?)?.toDouble() ?? 0.0,
+    paid: (json['paid'] as num?)?.toDouble() ?? 0.0,
+    teeth:
+        (json['teeth'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, v as String),
+        ) ??
+        {},
+    teethExtraNotes:
+        (json['teethExtraNotes'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(k, v as String),
+        ) ??
+        {},
+    hasLabwork: json['hasLabwork'] as bool? ?? false,
+    labName: json['labName'] as String? ?? '',
+    labworkNotes: json['labworkNotes'] as String? ?? '',
+  );
+}
+
+// ============================================================================
+//  Services
+// ============================================================================
+
+T _parse<T>(http.Response r, T Function(Map<String, dynamic>) fromJson) {
+  final body = jsonDecode(r.body) as Map<String, dynamic>;
+  if (r.statusCode == 200) return fromJson(body);
+  throw Exception(body['error'] ?? 'Request failed (${r.statusCode})');
+}
+
 class ExpenseReaderService {
   final String workerUrl;
   final String server;
   final String key;
-
-  /// List of supplier names to match against.
-  /// Pass these per-request — the worker requires them.
   final List<String> suppliers;
 
   const ExpenseReaderService({
@@ -67,95 +124,130 @@ class ExpenseReaderService {
     required this.suppliers,
   });
 
-  /// Reads a receipt image from a file path and returns structured data.
   Future<ReceiptData> readReceiptFromFile(String imagePath) async {
     final bytes = await File(imagePath).readAsBytes();
     return _sendImage(bytes);
   }
 
-  /// Reads a receipt image picked via image_picker.
   Future<ReceiptData> readReceiptFromPicker() async {
-    final picker = ImagePicker();
-    final xFile = await picker.pickImage(source: ImageSource.gallery);
-
-    if (xFile == null) {
-      throw Exception('No image selected');
-    }
-
-    final bytes = await xFile.readAsBytes();
-    return _sendImage(bytes);
+    final xFile = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (xFile == null) throw Exception('No image selected');
+    return _sendImage(await xFile.readAsBytes());
   }
 
-  /// Sends raw image bytes to the worker as multipart/form-data.
   Future<ReceiptData> _sendImage(List<int> bytes) async {
-    final uri = Uri.parse(workerUrl);
-    final request = http.MultipartRequest('POST', uri);
-
-    // Auth via headers
-    request.headers['x-server'] = server;
-    request.headers['x-worker-key'] = key;
-
-    // Suppliers as a form field
-    request.fields['suppliers'] = suppliers.join(',');
-
-    // Attach the image file
-    request.files.add(
+    final r = http.MultipartRequest('POST', Uri.parse('$workerUrl/expense'));
+    r.headers['x-server'] = server;
+    r.headers['x-worker-key'] = key;
+    r.fields['suppliers'] = suppliers.join(',');
+    r.files.add(
       http.MultipartFile.fromBytes('image', bytes, filename: 'receipt.jpg'),
     );
-
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
-
-    if (response.statusCode == 200) {
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      return ReceiptData.fromJson(json);
-    } else if (response.statusCode == 401) {
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      throw Exception(
-        'Authentication failed: ${json['error'] ?? 'Unknown error'}',
-      );
-    } else {
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      throw Exception(
-        json['error'] ?? 'Request failed (${response.statusCode})',
-      );
-    }
+    final res = await http.Response.fromStream(await r.send());
+    return _parse(res, ReceiptData.fromJson);
   }
 }
 
-// ---- Usage example ----
+class PostOpService {
+  final String workerUrl;
+  final String server;
+  final String key;
+
+  const PostOpService({
+    required this.workerUrl,
+    required this.server,
+    required this.key,
+  });
+
+  /// Send an audio recording to /post-op-notes.
+  ///
+  /// [existingFields] — pre-filled fields from the UI. Gemini merges the
+  /// audio notes with these, with audio taking precedence on conflicts.
+  Future<PostOpData> processAudio(
+    List<int> audioBytes,
+    String filename, {
+    PostOpData? existingFields,
+  }) async {
+    final r = http.MultipartRequest(
+      'POST',
+      Uri.parse('$workerUrl/post-op-notes'),
+    );
+    r.headers['x-server'] = server;
+    r.headers['x-worker-key'] = key;
+    if (existingFields != null) {
+      r.fields['existingFields'] = jsonEncode(existingFields);
+    }
+    r.files.add(
+      http.MultipartFile.fromBytes('audio', audioBytes, filename: filename),
+    );
+    final res = await http.Response.fromStream(await r.send());
+    return _parse(res, PostOpData.fromJson);
+  }
+
+  Future<PostOpData> processAudioFromFile(
+    String path, {
+    PostOpData? existingFields,
+  }) async => processAudio(
+    await File(path).readAsBytes(),
+    path.split('/').last,
+    existingFields: existingFields,
+  );
+}
+
+// ============================================================================
+//  Examples
+// ============================================================================
 
 Future<void> main() async {
-  final service = ExpenseReaderService(
+  // ---- Expense ----
+  final expense = ExpenseReaderService(
     workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
     server: 'my-clinic-server',
     key: 'my-secret-key',
-    suppliers: [
-      'Walmart',
-      'Costco',
-      'Target',
-      'Amazon',
-      'Home Depot',
-      'Staples',
-    ],
+    suppliers: ['Walmart', 'Costco', 'Target'],
   );
 
   try {
-    // Option A: pick from gallery
-    final receipt = await service.readReceiptFromPicker();
-    print('Supplier: ${receipt.supplierName}');
-    print('Date: ${receipt.orderDate}');
-    print('Total: \$${receipt.totalPrice.toStringAsFixed(2)}');
-    print('Items:');
-    for (final item in receipt.orderItems) {
+    final r = await expense.readReceiptFromPicker();
+    print('Supplier: ${r.supplierName}');
+    print('Date: ${r.orderDate}');
+    print('Total: \$${r.totalPrice.toStringAsFixed(2)}');
+    for (final i in r.orderItems) {
       print(
-        '  - ${item.name} x${item.quantity} @ \$${item.unitPrice.toStringAsFixed(2)} = \$${item.totalPrice.toStringAsFixed(2)}',
+        '  - ${i.name} x${i.quantity} @ \$${i.unitPrice.toStringAsFixed(2)}',
       );
     }
-
-    // Option B: from a known file path
-    // final receipt = await service.readReceiptFromFile('/path/to/receipt.jpg');
   } catch (e) {
-    print('Error: $e');
+    print('Expense error: $e');
+  }
+
+  // ---- Post-Op Notes ----
+  final postOp = PostOpService(
+    workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
+    server: 'my-clinic-server',
+    key: 'my-secret-key',
+  );
+
+  try {
+    final notes = await postOp.processAudioFromFile(
+      '/path/to/voice-note.m4a',
+      existingFields: PostOpData(
+        postOpNotes: '',
+        prescriptions: [],
+        price: 500,
+        paid: 0,
+        teeth: {'11': 'filling'},
+        teethExtraNotes: {},
+        hasLabwork: false,
+        labName: '',
+        labworkNotes: '',
+      ),
+    );
+    print('\nPost-op: ${notes.teeth}');
+    print('Price: ${notes.price}  Paid: ${notes.paid}');
+    print('Rx: ${notes.prescriptions}');
+    print('Lab: ${notes.hasLabwork}');
+  } catch (e) {
+    print('Post-op error: $e');
   }
 }
