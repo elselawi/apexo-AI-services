@@ -12,6 +12,15 @@
 	},
 	"compatibility_flags": [
 		"nodejs_compat"
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"kv_namespaces": [
+		{
+			"binding": "apexo_notifications_relay",
+			"id": "6ead6f12cb234414b899d38757111a72"
+		}
 	]
 	/**
 	 * Smart Placement
