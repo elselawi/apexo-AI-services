@@ -101,6 +101,27 @@ class PostOpData {
   );
 }
 
+class DentalHistoryData {
+  final Map<String, String> teeth;
+  final Map<String, String> teethExtraNotes;
+
+  DentalHistoryData({required this.teeth, required this.teethExtraNotes});
+
+  factory DentalHistoryData.fromJson(Map<String, dynamic> json) =>
+      DentalHistoryData(
+        teeth:
+            (json['teeth'] as Map<String, dynamic>?)?.map(
+              (k, v) => MapEntry(k, v as String),
+            ) ??
+            {},
+        teethExtraNotes:
+            (json['teethExtraNotes'] as Map<String, dynamic>?)?.map(
+              (k, v) => MapEntry(k, v as String),
+            ) ??
+            {},
+      );
+}
+
 // ============================================================================
 //  Services
 // ============================================================================
@@ -115,13 +136,13 @@ class ExpenseReaderService {
   final String workerUrl;
   final String server;
   final String key;
-  final List<String> suppliers;
+  final List<String>? suppliers; // optional — can be null
 
   const ExpenseReaderService({
     required this.workerUrl,
     required this.server,
     required this.key,
-    required this.suppliers,
+    this.suppliers,
   });
 
   Future<ReceiptData> readReceiptFromFile(String imagePath) async {
@@ -139,7 +160,9 @@ class ExpenseReaderService {
     final r = http.MultipartRequest('POST', Uri.parse('$workerUrl/expense'));
     r.headers['x-server'] = server;
     r.headers['x-worker-key'] = key;
-    r.fields['suppliers'] = suppliers.join(',');
+    if (suppliers != null && suppliers.isNotEmpty) {
+      r.fields['suppliers'] = suppliers.join(',');
+    }
     r.files.add(
       http.MultipartFile.fromBytes('image', bytes, filename: 'receipt.jpg'),
     );
@@ -163,10 +186,14 @@ class PostOpService {
   ///
   /// [existingFields] — pre-filled fields from the UI. Gemini merges the
   /// audio notes with these, with audio taking precedence on conflicts.
+  ///
+  /// [lang] — optional 2-letter language code (e.g. "en", "ar"). When set,
+  /// `postOpNotes`, `teethExtraNotes`, and `labworkNotes` are translated.
   Future<PostOpData> processAudio(
     List<int> audioBytes,
     String filename, {
     PostOpData? existingFields,
+    String? lang,
   }) async {
     final r = http.MultipartRequest(
       'POST',
@@ -176,6 +203,9 @@ class PostOpService {
     r.headers['x-worker-key'] = key;
     if (existingFields != null) {
       r.fields['existingFields'] = jsonEncode(existingFields);
+    }
+    if (lang != null) {
+      r.fields['lang'] = lang;
     }
     r.files.add(
       http.MultipartFile.fromBytes('audio', audioBytes, filename: filename),
@@ -187,10 +217,56 @@ class PostOpService {
   Future<PostOpData> processAudioFromFile(
     String path, {
     PostOpData? existingFields,
+    String? lang,
   }) async => processAudio(
     await File(path).readAsBytes(),
     path.split('/').last,
     existingFields: existingFields,
+    lang: lang,
+  );
+}
+
+class DentalHistoryService {
+  final String workerUrl;
+  final String server;
+  final String key;
+
+  const DentalHistoryService({
+    required this.workerUrl,
+    required this.server,
+    required this.key,
+  });
+
+  /// Send an audio recording to /dental-history.
+  ///
+  /// [lang] — optional 2-letter language code. When set,
+  /// `teethExtraNotes` values are translated.
+  Future<DentalHistoryData> processAudio(
+    List<int> audioBytes,
+    String filename, {
+    String? lang,
+  }) async {
+    final r = http.MultipartRequest(
+      'POST',
+      Uri.parse('$workerUrl/dental-history'),
+    );
+    r.headers['x-server'] = server;
+    r.headers['x-worker-key'] = key;
+    if (lang != null) r.fields['lang'] = lang;
+    r.files.add(
+      http.MultipartFile.fromBytes('audio', audioBytes, filename: filename),
+    );
+    final res = await http.Response.fromStream(await r.send());
+    return _parse(res, DentalHistoryData.fromJson);
+  }
+
+  Future<DentalHistoryData> processAudioFromFile(
+    String path, {
+    String? lang,
+  }) async => processAudio(
+    await File(path).readAsBytes(),
+    path.split('/').last,
+    lang: lang,
   );
 }
 
@@ -242,6 +318,7 @@ Future<void> main() async {
         labName: '',
         labworkNotes: '',
       ),
+      lang: 'en', // translate note fields to English
     );
     print('\nPost-op: ${notes.teeth}');
     print('Price: ${notes.price}  Paid: ${notes.paid}');
@@ -249,5 +326,23 @@ Future<void> main() async {
     print('Lab: ${notes.hasLabwork}');
   } catch (e) {
     print('Post-op error: $e');
+  }
+
+  // ---- Dental History ----
+  final dentalHistory = DentalHistoryService(
+    workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
+    server: 'my-clinic-server',
+    key: 'my-secret-key',
+  );
+
+  try {
+    final history = await dentalHistory.processAudioFromFile(
+      '/path/to/patient-history.m4a',
+      lang: 'en',
+    );
+    print('\nDental history teeth: ${history.teeth}');
+    print('Teeth notes: ${history.teethExtraNotes}');
+  } catch (e) {
+    print('Dental history error: $e');
   }
 }

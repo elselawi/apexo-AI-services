@@ -4,7 +4,8 @@
 
 Currently:
 - Expense OCR
-- Post-op notes taking
+- Post-op notes voice taking
+- Dental history notes voice taking
 
 
 Check `example.dart` on how to consume the worker.
