@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "expense-reader",
+	"name": "apexo-ai-services",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-03-10",
 	"observability": {
@@ -13,9 +13,6 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"ai": {
-		"binding": "AI"
-	},
 	"kv_namespaces": [
 		{
 			"binding": "apexo_notifications_relay",

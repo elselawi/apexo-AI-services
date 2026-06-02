@@ -277,7 +277,7 @@ class DentalHistoryService {
 Future<void> main() async {
   // ---- Expense ----
   final expense = ExpenseReaderService(
-    workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
+    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
     server: 'my-clinic-server',
     key: 'my-secret-key',
     suppliers: ['Walmart', 'Costco', 'Target'],
@@ -299,7 +299,7 @@ Future<void> main() async {
 
   // ---- Post-Op Notes ----
   final postOp = PostOpService(
-    workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
+    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
     server: 'my-clinic-server',
     key: 'my-secret-key',
   );
@@ -330,7 +330,7 @@ Future<void> main() async {
 
   // ---- Dental History ----
   final dentalHistory = DentalHistoryService(
-    workerUrl: 'https://expense-reader.your-subdomain.workers.dev',
+    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
     server: 'my-clinic-server',
     key: 'my-secret-key',
   );
