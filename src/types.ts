@@ -83,3 +83,12 @@ export interface DentalHistoryProcessParams extends ProcessParams {
 export interface ScannerProcessParams extends ProcessParams {
     suppliers?: string[] | null;
 }
+
+// ============================================================================
+//  Token auth types
+// ============================================================================
+
+export interface TokenData {
+    server: string;
+    expiresAt: number; // epoch ms
+}

@@ -1,6 +1,5 @@
-import { whitelist } from "./whitelist";
 import type { Env } from "./types";
-import { authenticate } from "./auth";
+import { AuthManager } from "./auth";
 import { parseImage, parseAudio } from "./parser";
 import { ReceiptScanner, PostOpTranscriber, DentalHistoryTranscriber } from "./gemini";
 
@@ -17,28 +16,38 @@ export default {
 		const path = new URL(request.url).pathname;
 
 		if (method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-
-		if (method === "GET" && path === "/") {
-			const s = request.headers.get("x-server");
-			return whitelist.includes(s ?? "") || whitelist.length === 0
-				? json({ message: "ok" })
-				: error(`Server "${s}" not whitelisted.`, 403);
-		}
-
 		if (method !== "POST") return error("Only POST accepted.", 405);
 
-		// Auth
-		const server = request.headers.get("x-server");
-		const key = request.headers.get("x-worker-key");
-		const auth = await authenticate(server ?? "", key ?? "", env.apexo_notifications_relay);
-		if (auth !== true) return error(auth, 401);
+		const auth = new AuthManager(env.apexo_notifications_relay);
+
+		// ── POST /auth — issue a token ─────────────────────────────────────
+		if (path === "/auth") {
+			const server = request.headers.get("x-server");
+			const key = request.headers.get("x-worker-key");
+			const result = await auth.authenticateServer(server ?? "", key ?? "");
+			if (result !== true) return error(result, 401);
+
+			const tokenResult = await auth.createToken(server!);
+			if ("error" in tokenResult) return error(tokenResult.error, 429);
+
+			return json({
+				token: tokenResult.token,
+				expiresIn: 86400, // 24 hours in seconds
+			});
+		}
+
+		// ── Data endpoints — validate bearer token ─────────────────────────
+		const tokenAuth = await auth.authenticateRequest(request);
+		if ("error" in tokenAuth) return error(tokenAuth.error, 401);
+
+		const server = tokenAuth.server;
 
 		// Rate limit
-		const rateCheck = await checkRateLimit(server ?? "unknown", env.apexo_notifications_relay);
+		const rateCheck = await checkRateLimit(server, env.apexo_notifications_relay);
 		if (rateCheck !== true) return error(rateCheck, 429);
 
 		try {
-			if (path === "/expense" || path === "/") return handleExpense(request, env);
+			if (path === "/expense") return handleExpense(request, env);
 			if (path === "/post-op-notes") return handlePostOp(request, env);
 			if (path === "/dental-history") return handleDentalHistory(request, env);
 			return error(`Unknown path: ${path}`, 404);

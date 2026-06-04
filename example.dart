@@ -123,7 +123,42 @@ class DentalHistoryData {
 }
 
 // ============================================================================
-//  Services
+//  Auth — obtain a bearer token via POST /auth
+// ============================================================================
+
+/// Authenticates with the Worker and returns a short-lived bearer token.
+///
+/// Call this first, then pass the token to the service constructors below.
+class AuthService {
+  final String workerUrl;
+
+  const AuthService({required this.workerUrl});
+
+  /// POST /auth with `x-server` and `x-worker-key` headers.
+  ///
+  /// Returns a token valid for 24 hours. Only 20 tokens per server are
+  /// allowed at any given time.
+  Future<String> authenticate({
+    required String server,
+    required String key,
+  }) async {
+    final r = await http.post(
+      Uri.parse('$workerUrl/auth'),
+      headers: {'x-server': server, 'x-worker-key': key},
+    );
+
+    if (r.statusCode != 200) {
+      final body = jsonDecode(r.body) as Map<String, dynamic>;
+      throw Exception(body['error'] ?? 'Auth failed (${r.statusCode})');
+    }
+
+    final body = jsonDecode(r.body) as Map<String, dynamic>;
+    return body['token'] as String;
+  }
+}
+
+// ============================================================================
+//  Services (use bearer token instead of x-server / x-worker-key)
 // ============================================================================
 
 T _parse<T>(http.Response r, T Function(Map<String, dynamic>) fromJson) {
@@ -132,16 +167,19 @@ T _parse<T>(http.Response r, T Function(Map<String, dynamic>) fromJson) {
   throw Exception(body['error'] ?? 'Request failed (${r.statusCode})');
 }
 
+/// Adds `Authorization: Bearer <token>` to the given request.
+void _addToken(http.MultipartRequest r, String token) {
+  r.headers['Authorization'] = 'Bearer $token';
+}
+
 class ExpenseReaderService {
   final String workerUrl;
-  final String server;
-  final String key;
+  final String token;
   final List<String>? suppliers; // optional — can be null
 
   const ExpenseReaderService({
     required this.workerUrl,
-    required this.server,
-    required this.key,
+    required this.token,
     this.suppliers,
   });
 
@@ -158,8 +196,7 @@ class ExpenseReaderService {
 
   Future<ReceiptData> _sendImage(List<int> bytes) async {
     final r = http.MultipartRequest('POST', Uri.parse('$workerUrl/expense'));
-    r.headers['x-server'] = server;
-    r.headers['x-worker-key'] = key;
+    _addToken(r, token);
     if (suppliers != null && suppliers.isNotEmpty) {
       r.fields['suppliers'] = suppliers.join(',');
     }
@@ -173,14 +210,9 @@ class ExpenseReaderService {
 
 class PostOpService {
   final String workerUrl;
-  final String server;
-  final String key;
+  final String token;
 
-  const PostOpService({
-    required this.workerUrl,
-    required this.server,
-    required this.key,
-  });
+  const PostOpService({required this.workerUrl, required this.token});
 
   /// Send an audio recording to /post-op-notes.
   ///
@@ -199,8 +231,7 @@ class PostOpService {
       'POST',
       Uri.parse('$workerUrl/post-op-notes'),
     );
-    r.headers['x-server'] = server;
-    r.headers['x-worker-key'] = key;
+    _addToken(r, token);
     if (existingFields != null) {
       r.fields['existingFields'] = jsonEncode(existingFields);
     }
@@ -228,14 +259,9 @@ class PostOpService {
 
 class DentalHistoryService {
   final String workerUrl;
-  final String server;
-  final String key;
+  final String token;
 
-  const DentalHistoryService({
-    required this.workerUrl,
-    required this.server,
-    required this.key,
-  });
+  const DentalHistoryService({required this.workerUrl, required this.token});
 
   /// Send an audio recording to /dental-history.
   ///
@@ -250,8 +276,7 @@ class DentalHistoryService {
       'POST',
       Uri.parse('$workerUrl/dental-history'),
     );
-    r.headers['x-server'] = server;
-    r.headers['x-worker-key'] = key;
+    _addToken(r, token);
     if (lang != null) r.fields['lang'] = lang;
     r.files.add(
       http.MultipartFile.fromBytes('audio', audioBytes, filename: filename),
@@ -275,15 +300,24 @@ class DentalHistoryService {
 // ============================================================================
 
 Future<void> main() async {
-  // ---- Expense ----
-  final expense = ExpenseReaderService(
-    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
-    server: 'my-clinic-server',
-    key: 'my-secret-key',
-    suppliers: ['Walmart', 'Costco', 'Target'],
-  );
+  const workerUrl = 'https://apexo-ai-services.your-subdomain.workers.dev';
+  const server = 'my-clinic-server';
+  const key = 'my-secret-key';
 
+  // ── 1. Authenticate once, get a bearer token ──────────────────────────
+  final auth = AuthService(workerUrl: workerUrl);
+  final token = await auth.authenticate(server: server, key: key);
+  print('Token obtained (valid for 24h).\n');
+
+  // ── 2. Use the same token for all service calls ───────────────────────
   try {
+    // ---- Expense ----
+    final expense = ExpenseReaderService(
+      workerUrl: workerUrl,
+      token: token,
+      suppliers: ['Walmart', 'Costco', 'Target'],
+    );
+
     final r = await expense.readReceiptFromPicker();
     print('Supplier: ${r.supplierName}');
     print('Date: ${r.orderDate}');
@@ -297,14 +331,10 @@ Future<void> main() async {
     print('Expense error: $e');
   }
 
-  // ---- Post-Op Notes ----
-  final postOp = PostOpService(
-    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
-    server: 'my-clinic-server',
-    key: 'my-secret-key',
-  );
-
   try {
+    // ---- Post-Op Notes ----
+    final postOp = PostOpService(workerUrl: workerUrl, token: token);
+
     final notes = await postOp.processAudioFromFile(
       '/path/to/voice-note.m4a',
       existingFields: PostOpData(
@@ -328,14 +358,13 @@ Future<void> main() async {
     print('Post-op error: $e');
   }
 
-  // ---- Dental History ----
-  final dentalHistory = DentalHistoryService(
-    workerUrl: 'https://apexo-ai-services.your-subdomain.workers.dev',
-    server: 'my-clinic-server',
-    key: 'my-secret-key',
-  );
-
   try {
+    // ---- Dental History ----
+    final dentalHistory = DentalHistoryService(
+      workerUrl: workerUrl,
+      token: token,
+    );
+
     final history = await dentalHistory.processAudioFromFile(
       '/path/to/patient-history.m4a',
       lang: 'en',
