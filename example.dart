@@ -295,6 +295,42 @@ class DentalHistoryService {
   );
 }
 
+class ToTextService {
+  final String workerUrl;
+  final String token;
+
+  const ToTextService({required this.workerUrl, required this.token});
+
+  /// Send an audio recording to /to-text.
+  ///
+  /// Returns the rephrased, clinically-focused text.
+  ///
+  /// [lang] — optional 2-letter language code (e.g. "en", "ar").
+  Future<String> processAudio(
+    List<int> audioBytes,
+    String filename, {
+    String? lang,
+  }) async {
+    final r = http.MultipartRequest('POST', Uri.parse('$workerUrl/to-text'));
+    _addToken(r, token);
+    if (lang != null) r.fields['lang'] = lang;
+    r.files.add(
+      http.MultipartFile.fromBytes('audio', audioBytes, filename: filename),
+    );
+    final res = await http.Response.fromStream(await r.send());
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode == 200) return body['text'] as String? ?? '';
+    throw Exception(body['error'] ?? 'Request failed (${res.statusCode})');
+  }
+
+  Future<String> processAudioFromFile(String path, {String? lang}) async =>
+      processAudio(
+        await File(path).readAsBytes(),
+        path.split('/').last,
+        lang: lang,
+      );
+}
+
 // ============================================================================
 //  Examples
 // ============================================================================
@@ -373,5 +409,18 @@ Future<void> main() async {
     print('Teeth notes: ${history.teethExtraNotes}');
   } catch (e) {
     print('Dental history error: $e');
+  }
+
+  try {
+    // ---- To-Text --
+    final toText = ToTextService(workerUrl: workerUrl, token: token);
+
+    final clinicalText = await toText.processAudioFromFile(
+      '/path/to/clinical-note.m4a',
+      lang: 'en',
+    );
+    print('\nClinical text:\n$clinicalText');
+  } catch (e) {
+    print('To-text error: $e');
   }
 }

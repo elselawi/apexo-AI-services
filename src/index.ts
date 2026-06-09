@@ -1,11 +1,12 @@
 import type { Env } from "./types";
 import { AuthManager } from "./auth";
 import { parseImage, parseAudio } from "./parser";
-import { ReceiptScanner, PostOpTranscriber, DentalHistoryTranscriber } from "./gemini";
+import { ReceiptScanner, PostOpTranscriber, DentalHistoryTranscriber, ToTextTranscriber } from "./gemini";
 
 const receiptScanner = new ReceiptScanner();
 const postOpTranscriber = new PostOpTranscriber();
 const dentalHistoryTranscriber = new DentalHistoryTranscriber();
+const toTextTranscriber = new ToTextTranscriber();
 import { corsHeaders, json, error } from "./response";
 import { checkRateLimit } from "./rate-limit";
 import { sanitizePostOpFields } from "./sanitize";
@@ -50,6 +51,7 @@ export default {
 			if (path === "/expense") return handleExpense(request, env);
 			if (path === "/post-op-notes") return handlePostOp(request, env);
 			if (path === "/dental-history") return handleDentalHistory(request, env);
+			if (path === "/to-text") return handleToText(request, env);
 			return error(`Unknown path: ${path}`, 404);
 		} catch (err) {
 			return error(`Gemini error: ${err instanceof Error ? err.message : String(err)}`, 500);
@@ -74,4 +76,12 @@ async function handleDentalHistory(request: Request, env: Env): Promise<Response
 	const p = await parseAudio(request);
 	if ("error" in p) return error(p.error, 400);
 	return json(await dentalHistoryTranscriber.process({ file: p.audioBytes, mimeType: p.mimeType, apiKey: env.GEMINI_API_KEY, lang: p.lang }));
+}
+
+async function handleToText(request: Request, env: Env): Promise<Response> {
+	const p = await parseAudio(request);
+	if ("error" in p) return error(p.error, 400);
+	if (p.lang) toTextTranscriber.lang = p.lang;
+	const result = await toTextTranscriber.process({ file: p.audioBytes, mimeType: p.mimeType, apiKey: env.GEMINI_API_KEY });
+	return json({ text: result });
 }

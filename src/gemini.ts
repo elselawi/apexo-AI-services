@@ -93,6 +93,37 @@ abstract class GeminiProcess {
         throw lastError ?? new Error("Gemini API failed after 3 retries.");
     }
 
+    /** Plain-text generation — no JSON schema, just returns the raw text response. */
+    protected async generateText(prompt: string, fileUri: string, mimeType: string, apiKey: string): Promise<string> {
+        const payload = {
+            contents: [{ parts: [{ text: prompt }, { fileData: { mimeType, fileUri } }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+        };
+
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) await new Promise((r) => setTimeout(r, Math.pow(2, attempt - 1) * 1000));
+
+            const res = await fetch(`${this.GENERATE}?key=${apiKey}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+
+            if (res.status === 429 || res.status >= 500) {
+                lastError = new Error(`Gemini API error ${res.status}: ${await res.text()}`);
+                continue;
+            }
+            if (!res.ok) throw new Error(`Gemini API error ${res.status}: ${await res.text()}`);
+
+            const data = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text) throw new Error("Gemini returned no content");
+            return text.trim();
+        }
+        throw lastError ?? new Error("Gemini API failed after 3 retries.");
+    }
+
     protected toothProps(enumValues?: string[]): Record<string, { type: string; enum?: string[] }> {
         const props: Record<string, { type: string; enum?: string[] }> = {};
         for (const t of this.ALL_TEETH) props[t] = enumValues ? { type: "STRING", enum: enumValues } : { type: "STRING" };
@@ -316,5 +347,41 @@ RULES:
             },
             required: ["teeth", "teethExtraNotes"],
         };
+    }
+}
+
+// ============================================================================
+//  To-Text Transcriber — rephrase audio into clear clinical text (no JSON)
+// ============================================================================
+
+export class ToTextTranscriber extends GeminiProcess {
+
+    lang: string | undefined = undefined;
+
+    async process(params: ProcessParams): Promise<string> {
+        const ext = params.mimeType.split("/")[1] || "mp3";
+        const fileUri = await this.upload(params.file, params.mimeType, `audio_${Date.now()}.${ext}`, params.apiKey);
+        return await this.generateText(this.prompt(), fileUri, params.mimeType, params.apiKey);
+    }
+
+    protected prompt(): string {
+        const langNote = this.lang
+            ? `\n\nOUTPUT LANGUAGE: Write the response in "${this.lang}".`
+            : "";
+        return `You are a clinical note rephraser. Listen to this audio recording and rewrite the spoken content into clear, professional, clinically-focused text.${langNote}
+
+RULES:
+- Rephrase free-form speech into a well-structured, concise clinical narrative.
+- Remove filler words ("um", "uh", "you know", etc.), stutters, and informal language.
+- Use proper medical/dental terminology where appropriate.
+- Preserve ALL factual information: diagnoses, procedures, medications, tooth numbers, instructions, observations.
+- Do NOT invent or add any clinical information not present in the audio.
+- Output ONLY the rephrased text — no markdown, no JSON, no introductory remarks, no commentary.
+- Write in a natural clinical note style suitable for a patient record.`;
+    }
+
+    // Not used for plain-text generation
+    protected schema(): SchemaType {
+        return { type: "STRING" };
     }
 }
