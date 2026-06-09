@@ -43,6 +43,25 @@ abstract class GeminiProcess {
         return uri;
     }
 
+    /** Strip markdown code fences and trailing noise so JSON.parse works. */
+    protected extractJson(text: string): string {
+        // Remove ```json ... ``` or ``` ... ``` markers
+        let cleaned = text.replace(/```(?:json)?\s*\n?/gi, "").replace(/\s*```/g, "");
+        // Some models return trailing punctuation or notes after the JSON
+        // Try to locate the outermost { … } or [ … ] and extract just that
+        const braceStart = cleaned.indexOf("{");
+        const braceEnd = cleaned.lastIndexOf("}");
+        const bracketStart = cleaned.indexOf("[");
+        const bracketEnd = cleaned.lastIndexOf("]");
+
+        if (braceStart !== -1 && braceEnd > braceStart) {
+            cleaned = cleaned.slice(braceStart, braceEnd + 1);
+        } else if (bracketStart !== -1 && bracketEnd > bracketStart) {
+            cleaned = cleaned.slice(bracketStart, bracketEnd + 1);
+        }
+        return cleaned.trim();
+    }
+
     protected async generate<T>(payload: GeminiPayload, apiKey: string): Promise<T> {
         let lastError: Error | null = null;
         for (let attempt = 0; attempt < 3; attempt++) {
@@ -64,7 +83,12 @@ abstract class GeminiProcess {
             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
             if (!text) throw new Error("Gemini returned no content");
 
-            return JSON.parse(text) as T;
+            try {
+                return JSON.parse(this.extractJson(text)) as T;
+            } catch (parseErr) {
+                lastError = new Error(`JSON parse error: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}\nRaw text: ${text.slice(0, 500)}`);
+                continue;
+            }
         }
         throw lastError ?? new Error("Gemini API failed after 3 retries.");
     }
