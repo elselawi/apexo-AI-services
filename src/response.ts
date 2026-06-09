@@ -15,7 +15,7 @@ export const corsHeaders = {
 };
 
 export function json(data: unknown, status = 200): Response {
-    return new Response(JSON.stringify({ ...(data as Record<string, unknown>), _v: "5.0.0" }, null, 2), {
+    return new Response(JSON.stringify({ ...(data as Record<string, unknown>), _v: "5.1.1" }, null, 2), {
         status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
