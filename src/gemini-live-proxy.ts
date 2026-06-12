@@ -38,39 +38,35 @@ export async function handleGeminiLiveProxy(
     const geminiUrl = `${GEMINI_LIVE_WS_BASE}?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
     const geminiWs = new WebSocket(geminiUrl);
 
-    // ── Relay: client → Gemini ──────────────────────────────────────────
+    // Buffer client→Gemini messages until the upstream socket is open
+    const pending: string[] = [];
+    geminiWs.addEventListener("open", () => {
+        for (const msg of pending) geminiWs.send(msg);
+        pending.length = 0;
+    });
+
+    // ── Relay: client → Gemini ──────────────────────────────────────
     serverWs.addEventListener("message", (event: MessageEvent) => {
         if (geminiWs.readyState === WebSocket.READY_STATE_OPEN) {
             geminiWs.send(event.data);
+        } else {
+            pending.push(event.data as string);
         }
     });
 
-    // ── Relay: Gemini → client ──────────────────────────────────────────
+    // ── Relay: Gemini → client ──────────────────────────────────────
     geminiWs.addEventListener("message", (event: MessageEvent) => {
         if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
             serverWs.send(event.data);
         }
     });
 
-    // ── Lifecycle: close propagation ────────────────────────────────────
-    const cleanup = () => {
-        try { geminiWs.close(); } catch { /* ignore */ }
-    };
-
+    // ── Lifecycle: close propagation ────────────────────────────────
+    const cleanup = () => { try { geminiWs.close(); } catch { /* ignore */ } };
     serverWs.addEventListener("close", cleanup);
     serverWs.addEventListener("error", cleanup);
+    geminiWs.addEventListener("close", () => { try { serverWs.close(); } catch { /* ignore */ } });
+    geminiWs.addEventListener("error", () => { try { serverWs.close(1011, "Gemini WebSocket error"); } catch { /* ignore */ } });
 
-    geminiWs.addEventListener("close", () => {
-        try { serverWs.close(); } catch { /* ignore */ }
-    });
-
-    geminiWs.addEventListener("error", () => {
-        try { serverWs.close(1011, "Gemini WebSocket error"); } catch { /* ignore */ }
-    });
-
-    // ── Return 101 with the client-side WebSocket ───────────────────────
-    return new Response(null, {
-        status: 101,
-        webSocket: clientWs,
-    });
+    return new Response(null, { status: 101, webSocket: clientWs });
 }
