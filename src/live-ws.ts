@@ -1,16 +1,6 @@
 // ============================================================================
 // Gemini Live API — WebSocket reverse proxy (full server-side setup)
 // ============================================================================
-//
-// The Worker owns the entire Gemini session configuration. When the
-// upstream WebSocket opens, it sends a server-configured
-// BidiGenerateContentSetup, then forwards setupComplete to the client.
-// All subsequent messages (audio chunks, tool responses) pass through
-// bidirectionally without inspection.
-//
-// Change provider, model, system prompt — anything — by editing the
-// SETUP_JSON below or loading it from env/KV. No app update needed.
-// ============================================================================
 
 import type { Env } from "./types";
 
@@ -20,7 +10,18 @@ const GEMINI_LIVE_WS_BASE =
 
 const DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview";
 
-function buildSetup(model: string): object {
+function buildSetup(model: string, lang?: string | null): object {
+    const systemText = lang
+        ? `You are a speech-to-text engine. ` +
+        `Transcribe the user's speech verbatim into ${lang}. ` +
+        `Do NOT speak or generate audio — remain completely silent. ` +
+        `Output the transcription only via the text channel.`
+        : `You are a speech-to-text engine. ` +
+        `Transcribe the user's speech verbatim into text. ` +
+        `Do NOT speak or generate audio — remain completely silent. ` +
+        `Output the transcription only via the text channel. ` +
+        `Support all languages automatically.`;
+
     return {
         setup: {
             model,
@@ -28,16 +29,7 @@ function buildSetup(model: string): object {
                 response_modalities: ["AUDIO"],
             },
             system_instruction: {
-                parts: [
-                    {
-                        text:
-                            "You are a speech-to-text engine. " +
-                            "Transcribe the user's speech verbatim into text. " +
-                            "Do NOT speak or generate audio — remain completely silent. " +
-                            "Output the transcription only via the text channel. " +
-                            "Support all languages automatically.",
-                    },
-                ],
+                parts: [{ text: systemText }],
             },
             input_audio_transcription: {},
         },
@@ -45,7 +37,7 @@ function buildSetup(model: string): object {
 }
 
 export async function handleGeminiLiveProxy(
-    _request: Request,
+    request: Request,                // ← no longer unused
     env: Env,
 ): Promise<Response> {
     const pair = new WebSocketPair();
@@ -56,27 +48,24 @@ export async function handleGeminiLiveProxy(
     const geminiWs = new WebSocket(geminiUrl);
 
     const model = DEFAULT_MODEL;
+    const lang = new URL(request.url).searchParams.get("lang");  // ← from client
 
-    // Buffer client→Gemini messages until the upstream is ready
     const pending: string[] = [];
 
-    // ── Once upstream opens, send our server-configured setup ───────────
     geminiWs.addEventListener("open", () => {
-        geminiWs.send(JSON.stringify(buildSetup(model)));
-        // Flush any early client messages (audio chunks that arrived before
-        // Gemini was ready — they'll be processed after setupComplete)
+        geminiWs.send(JSON.stringify(buildSetup(model, lang)));
         for (const msg of pending) geminiWs.send(msg);
         pending.length = 0;
     });
 
-    // ── Relay: Gemini → client (including setupComplete) ────────────────
+    // ── Relay: Gemini → client ──────────────────────────────────────
     geminiWs.addEventListener("message", (event: MessageEvent) => {
         if (serverWs.readyState === WebSocket.READY_STATE_OPEN) {
             serverWs.send(event.data);
         }
     });
 
-    // ── Relay: client → Gemini (audio chunks, tool responses, etc.) ─────
+    // ── Relay: client → Gemini ──────────────────────────────────────
     serverWs.addEventListener("message", (event: MessageEvent) => {
         if (geminiWs.readyState === WebSocket.READY_STATE_OPEN) {
             geminiWs.send(event.data);
@@ -85,30 +74,12 @@ export async function handleGeminiLiveProxy(
         }
     });
 
-    // ── Lifecycle ───────────────────────────────────────────────────────
-    const cleanup = () => {
-        try {
-            geminiWs.close();
-        } catch {
-            /* ignore */
-        }
-    };
+    // ── Lifecycle ───────────────────────────────────────────────────
+    const cleanup = () => { try { geminiWs.close(); } catch { /* ignore */ } };
     serverWs.addEventListener("close", cleanup);
     serverWs.addEventListener("error", cleanup);
-    geminiWs.addEventListener("close", () => {
-        try {
-            serverWs.close();
-        } catch {
-            /* ignore */
-        }
-    });
-    geminiWs.addEventListener("error", () => {
-        try {
-            serverWs.close(1011, "Gemini WebSocket error");
-        } catch {
-            /* ignore */
-        }
-    });
+    geminiWs.addEventListener("close", () => { try { serverWs.close(); } catch { /* ignore */ } });
+    geminiWs.addEventListener("error", () => { try { serverWs.close(1011, "Gemini WebSocket error"); } catch { /* ignore */ } });
 
     return new Response(null, { status: 101, webSocket: clientWs });
 }
