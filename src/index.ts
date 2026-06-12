@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { AuthManager } from "./auth";
 import { parseImage, parseAudio } from "./parser";
 import { ReceiptScanner, PostOpTranscriber, DentalHistoryTranscriber, ToTextTranscriber } from "./gemini";
-import { handleGeminiLiveProxy } from "./gemini-live-proxy";
+import { handleGeminiLiveProxy } from "./live-ws";
 
 const receiptScanner = new ReceiptScanner();
 const postOpTranscriber = new PostOpTranscriber();
@@ -20,7 +20,7 @@ export default {
 		if (method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
 		// WebSocket upgrades are GET — let them through the POST-only gate
-		const isGeminiLiveWs = method === "GET" && path === "/gemini-live";
+		const isGeminiLiveWs = method === "GET" && path === "/live-ws";
 		if (method !== "POST" && !isGeminiLiveWs) return error("Only POST accepted.", 405);
 
 		const auth = new AuthManager(env.apexo_notifications_relay);
