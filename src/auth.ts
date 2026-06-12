@@ -85,7 +85,6 @@ export class AuthManager {
     }
 
     // ── Private static helpers ──────────────────────────────────────────
-
     private static tokenKey(token: string) {
         return `token:${token}`;
     }
@@ -176,3 +175,4 @@ export class AuthManager {
         return [valid, hasPruned];
     }
 }
+

@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { AuthManager } from "./auth";
 import { parseImage, parseAudio } from "./parser";
 import { ReceiptScanner, PostOpTranscriber, DentalHistoryTranscriber, ToTextTranscriber } from "./gemini";
+import { handleGeminiLiveProxy } from "./gemini-live-proxy";
 
 const receiptScanner = new ReceiptScanner();
 const postOpTranscriber = new PostOpTranscriber();
@@ -17,11 +18,14 @@ export default {
 		const path = new URL(request.url).pathname;
 
 		if (method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-		if (method !== "POST") return error("Only POST accepted.", 405);
+
+		// WebSocket upgrades are GET — let them through the POST-only gate
+		const isGeminiLiveWs = method === "GET" && path === "/gemini-live";
+		if (method !== "POST" && !isGeminiLiveWs) return error("Only POST accepted.", 405);
 
 		const auth = new AuthManager(env.apexo_notifications_relay);
 
-		// ── POST /auth — issue a token ─────────────────────────────────────
+		// ── POST /auth — issue a token (no bearer auth needed) ─────────────
 		if (path === "/auth") {
 			const server = request.headers.get("x-server");
 			const key = request.headers.get("x-worker-key");
@@ -37,17 +41,20 @@ export default {
 			});
 		}
 
-		// ── Data endpoints — validate bearer token ─────────────────────────
+		// ── All other endpoints (including WebSocket) — validate bearer token
 		const tokenAuth = await auth.authenticateRequest(request);
 		if ("error" in tokenAuth) return error(tokenAuth.error, 401);
 
 		const server = tokenAuth.server;
 
-		// Rate limit
-		const rateCheck = await checkRateLimit(server, env.apexo_notifications_relay);
-		if (rateCheck !== true) return error(rateCheck, 429);
+		// Rate limit (skip for WebSocket — it's a persistent connection)
+		if (!isGeminiLiveWs) {
+			const rateCheck = await checkRateLimit(server, env.apexo_notifications_relay);
+			if (rateCheck !== true) return error(rateCheck, 429);
+		}
 
 		try {
+			if (isGeminiLiveWs) return handleGeminiLiveProxy(request, env);
 			if (path === "/expense") return handleExpense(request, env);
 			if (path === "/post-op-notes") return handlePostOp(request, env);
 			if (path === "/dental-history") return handleDentalHistory(request, env);
