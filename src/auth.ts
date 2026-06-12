@@ -68,17 +68,25 @@ export class AuthManager {
     }
 
     // ── Bearer token extraction + validation (used by data endpoints) ────
-
     async authenticateRequest(request: Request): Promise<{ server: string } | { error: string }> {
-        const authHeader = request.headers.get("Authorization");
-        if (!authHeader) return { error: "Missing Authorization header." };
+        let token: string | null = null;
 
-        const parts = authHeader.split(" ");
-        if (parts.length !== 2 || parts[0] !== "Bearer") {
-            return { error: "Authorization header must be 'Bearer <token>'." };
+        // Priority 1: Authorization header (native clients)
+        const authHeader = request.headers.get("Authorization");
+        if (authHeader) {
+            const parts = authHeader.split(" ");
+            if (parts.length === 2 && parts[0] === "Bearer") {
+                token = parts[1];
+            }
         }
 
-        const token = parts[1];
+        // Priority 2: ?token= query parameter (web clients — browser
+        // WebSocket API doesn't support custom headers)
+        if (!token) {
+            token = new URL(request.url).searchParams.get("token");
+        }
+
+        if (!token) return { error: "Missing Authorization header or ?token= query parameter." };
         if (!token) return { error: "Token is empty." };
 
         return this.validateToken(token);
